@@ -1,0 +1,28 @@
+{
+  "name": "ellemexa-price-manager",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "test": "vitest run tests/unit.test.ts",
+    "test:watch": "vitest",
+    "smoke": "vitest run tests/real-csv.smoke.test.ts"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "papaparse": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@types/papaparse": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "typescript": "latest",
+    "vitest": "latest"
+  }
+}

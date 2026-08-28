@@ -1,0 +1,13 @@
+node_modules/
+.npm-cache/
+.tmp/
+dist/
+coverage/
+.DS_Store
+reference/
+*.csv
+*.backup.json
+backup-*.json
+ellemexa-backup-*.json
+*.tsbuildinfo
+*.local
