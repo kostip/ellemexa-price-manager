@@ -2,17 +2,41 @@ import type { Catalog, OperationResult, PriceChange, PriceOperation, PreviewProd
 import { firstPhoto, parsePrice, productsInCategory, resolvePriceTargets } from './catalog'
 
 export class PriceOperationError extends Error {}
+export const MAX_PRICE = 10_000_000
 
 export function roundPrice(value: number): number {
   return Math.round(value / 10) * 10
 }
 
 export function validateOperation(operation: PriceOperation): string | null {
-  if (!Number.isFinite(operation.value) || operation.value <= 0) {
+  if (!Number.isFinite(operation.value)) {
+    return operation.type === 'fixed_price' ? 'Цена должна быть от 1 ₽ до 10 000 000 ₽.' : 'Укажите корректное числовое значение.'
+  }
+  if (operation.value <= 0) {
     return operation.type === 'fixed_price' ? 'Укажите цену больше 0 ₽.' : 'Укажите значение больше 0.'
+  }
+  if (operation.type === 'fixed_price' && operation.value > MAX_PRICE) {
+    return 'Цена должна быть от 1 ₽ до 10 000 000 ₽.'
   }
   if (operation.type === 'decrease_percent' && operation.value >= 100) {
     return 'После такой скидки цена станет нулевой или отрицательной.'
+  }
+  return null
+}
+
+export function validatePriceTargets(rows: Record<string, string>[], operation: PriceOperation): string | null {
+  const operationError = validateOperation(operation)
+  if (operationError) return operationError
+  for (const row of rows) {
+    const current = parsePrice(row.Price)
+    if (current === null) {
+      return 'У нескольких товаров обнаружена некорректная цена. Исправьте цены в Tilda и загрузите каталог заново.'
+    }
+    const next = calculatePrice(current, operation)
+    if (!Number.isFinite(next) || next > MAX_PRICE) {
+      return 'Итоговая цена превышает 10 000 000 ₽. Проверьте введенное значение.'
+    }
+    if (next <= 0) return 'Для части товаров цена станет нулевой или отрицательной. Уменьшите сумму изменения.'
   }
   return null
 }
@@ -36,9 +60,10 @@ function makeChange(row: Record<string, string>, parent: Product['parent'], oper
     throw new PriceOperationError('У нескольких товаров обнаружена некорректная цена. Исправьте цены в Tilda и загрузите каталог заново.')
   }
   const newPriceNumber = calculatePrice(oldPriceNumber, operation)
-  if (!Number.isFinite(newPriceNumber) || newPriceNumber <= 0) {
-    throw new PriceOperationError('Для части товаров цена станет нулевой или отрицательной. Уменьшите сумму изменения.')
+  if (!Number.isFinite(newPriceNumber) || newPriceNumber > MAX_PRICE) {
+    throw new PriceOperationError('Итоговая цена превышает 10 000 000 ₽. Проверьте введенное значение.')
   }
+  if (newPriceNumber <= 0) throw new PriceOperationError('Для части товаров цена станет нулевой или отрицательной. Уменьшите сумму изменения.')
   return {
     uid: row['Tilda UID'],
     parentUid: row['Parent UID'] || parent['Tilda UID'],
@@ -72,6 +97,8 @@ export function applyPriceOperation(catalog: Catalog, category: string, operatio
   if (!products.length) throw new PriceOperationError('В выбранной категории не найдено товаров.')
   const targets = products.flatMap((product) => resolvePriceTargets(product).map((row) => ({ row, product })))
   if (!targets.length) throw new PriceOperationError('В выбранной категории не найдено товаров, у которых можно изменить цену.')
+  const targetError = validatePriceTargets(targets.map(({ row }) => row), operation)
+  if (targetError) throw new PriceOperationError(targetError)
   const computed = targets.map(({ row, product }) => ({ row, change: makeChange(row, product.parent, operation) }))
   const changed = computed.filter(({ change }) => change.oldPrice !== change.newPrice)
   if (!changed.length) throw new PriceOperationError('Новые цены совпадают с текущими. Измените настройки операции.')
@@ -84,4 +111,3 @@ export function applyPriceOperation(catalog: Catalog, category: string, operatio
   const whitelist = new Set(changeMap.keys())
   return { catalog: { headers: [...catalog.headers], rows }, changes, preview: buildPreview(products, changes), whitelist }
 }
-

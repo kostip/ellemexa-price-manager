@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { Catalog, PriceBackup } from '../src/types'
 import { extractCategories, productsInCategory, resolvePriceTargets, resolveProducts, splitCategories } from '../src/lib/catalog'
-import { applyPriceOperation, calculatePrice } from '../src/lib/pricing'
+import { applyPriceOperation, calculatePrice, MAX_PRICE, validatePriceTargets } from '../src/lib/pricing'
 import { createBackup } from '../src/lib/backup'
 import { restorePrices } from '../src/lib/restore'
 import { createSafeCsv, SAFETY_ERROR, validateOutput } from '../src/lib/safety'
 import { parseCatalogCsv } from '../src/lib/csv'
+import { buildOperationFilenames, buildRestoreFilename, slugifyCategory } from '../src/lib/download'
 
 const headers = ['Tilda UID', 'Parent UID', 'Category', 'Title', 'Price', 'Price Old', 'Photo', 'Quantity', 'Editions', 'Description', 'Custom']
 const row = (values: Partial<Record<string, string>>) => Object.fromEntries(headers.map((header) => [header, values[header] ?? '']))
@@ -50,6 +51,65 @@ describe('price calculations', () => {
     const result = applyPriceOperation(fixture(), 'ПАРКИ 70 см', { type: 'decrease_percent', value: 20 })
     expect(result.catalog.rows.find((item) => item['Tilda UID'] === 'V1')?.Price).toBe('31990.00')
     expect(result.catalog.rows.find((item) => item['Tilda UID'] === 'V1')?.['Price Old']).toBe('62000')
+  })
+
+  it('allows a final price equal to 10 000 000', () => {
+    const result = applyPriceOperation(fixture(), 'OUTLET', { type: 'fixed_price', value: MAX_PRICE })
+    expect(result.changes.every((change) => change.newPriceNumber === MAX_PRICE)).toBe(true)
+  })
+
+  it('blocks a calculated final price above 10 000 000', () => {
+    const catalog = fixture()
+    catalog.rows[3] = { ...catalog.rows[3], Price: '9500000.00' }
+    expect(() => applyPriceOperation(catalog, 'OUTLET', { type: 'adjust_amount', value: 1_000_000, direction: 'add' })).toThrow('Итоговая цена превышает 10 000 000 ₽')
+  })
+
+  it('blocks a fixed price above 10 000 000', () => {
+    expect(() => applyPriceOperation(fixture(), 'OUTLET', { type: 'fixed_price', value: MAX_PRICE + 1 })).toThrow('Цена должна быть от 1 ₽ до 10 000 000 ₽.')
+  })
+
+  it('blocks a huge numeric value without building preview', () => {
+    expect(() => applyPriceOperation(fixture(), 'OUTLET', { type: 'fixed_price', value: 9999999999999999999999 })).toThrow('Цена должна быть от 1 ₽ до 10 000 000 ₽.')
+  })
+
+  it('returns a business validation error for target prices', () => {
+    const targets = productsInCategory(fixture(), 'OUTLET').flatMap(resolvePriceTargets)
+    expect(validatePriceTargets(targets, { type: 'adjust_amount', value: 60_000, direction: 'subtract' })).toBe('Для части товаров цена станет нулевой или отрицательной. Уменьшите сумму изменения.')
+  })
+})
+
+describe('safe filenames', () => {
+  const date = new Date(2026, 7, 28, 19, 48)
+
+  it('transliterates a category slug', () => {
+    expect(slugifyCategory('Дубленки из меха ТАСКАНЫ')).toBe('dublenki-iz-meha-taskany')
+  })
+
+  it('builds paired OUTLET discount filenames', () => {
+    expect(buildOperationFilenames('OUTLET', { type: 'decrease_percent', value: 20 }, date)).toEqual({
+      csv: 'ellemexa_outlet_discount-20pct_2026-08-28_19-48.csv',
+      backup: 'ellemexa_outlet_discount-20pct_2026-08-28_19-48_backup.json',
+    })
+  })
+
+  it('formats decimal percent safely', () => {
+    expect(buildOperationFilenames('Экошубы', { type: 'decrease_percent', value: 20.7 }, date).csv).toContain('discount-20-7pct')
+  })
+
+  it('formats fixed, add and subtract operations', () => {
+    expect(buildOperationFilenames('OUTLET', { type: 'fixed_price', value: 38000 }, date).csv).toContain('_fixed-38000rub_')
+    expect(buildOperationFilenames('OUTLET', { type: 'adjust_amount', value: 2000, direction: 'add' }, date).csv).toContain('_add-2000rub_')
+    expect(buildOperationFilenames('OUTLET', { type: 'adjust_amount', value: 2000, direction: 'subtract' }, date).csv).toContain('_subtract-2000rub_')
+  })
+
+  it('builds a restore filename', () => {
+    expect(buildRestoreFilename('OUTLET', date)).toBe('ellemexa_outlet_restore_2026-08-28_19-48.csv')
+  })
+
+  it('never emits spaces, Cyrillic or unsafe characters', () => {
+    const names = Object.values(buildOperationFilenames('Шубы / SALE & новое!', { type: 'increase_percent', value: 15 }, date))
+    names.push(buildRestoreFilename('Шубы / SALE & новое!', date))
+    expect(names.every((name) => !/[\sА-Яа-яЁё<>:"/\\|?*]/.test(name))).toBe(true)
   })
 })
 
@@ -105,4 +165,3 @@ describe('safety and CSV export', () => {
     expect(reparsed.rows[1]['Price Old']).toBe('62000')
   })
 })
-

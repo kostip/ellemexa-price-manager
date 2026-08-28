@@ -1,5 +1,6 @@
 import type { Catalog, PriceBackup, PriceChange, PreviewProduct, RestoreResult } from '../types'
 import { firstPhoto, parsePrice, resolveProducts } from './catalog'
+import { MAX_PRICE } from './pricing'
 
 export class RestoreError extends Error {}
 
@@ -15,6 +16,7 @@ export function restorePrices(catalog: Catalog, backup: PriceBackup): RestoreRes
     if (oldPriceNumber === null) {
       throw new RestoreError('У найденной позиции в текущем каталоге указана некорректная цена.')
     }
+    if (newPriceNumber > MAX_PRICE) throw new RestoreError('Итоговая цена превышает 10 000 000 ₽. Восстановление остановлено.')
     if (row.Price === item.originalPrice) return []
     return [{
       uid: item.tildaUid,
@@ -58,4 +60,3 @@ export function restorePrices(catalog: Catalog, backup: PriceBackup): RestoreRes
     missing: backup.items.length - foundItems.length,
   }
 }
-

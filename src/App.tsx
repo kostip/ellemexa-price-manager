@@ -2,173 +2,76 @@ import { useMemo, useRef, useState, type ChangeEvent, type DragEvent, type React
 import type { Catalog, OperationResult, PriceBackup, PriceOperation, PreviewProduct, RestoreResult } from './types'
 import { parseCatalogCsv } from './lib/csv'
 import { extractCategories, productsInCategory, resolvePriceTargets, validateCatalog } from './lib/catalog'
-import { applyPriceOperation, calculatePrice, validateOperation } from './lib/pricing'
+import { applyPriceOperation, calculatePrice, validatePriceTargets } from './lib/pricing'
 import { createBackup, parseBackupJson } from './lib/backup'
 import { restorePrices } from './lib/restore'
 import { createSafeCsv } from './lib/safety'
-import { downloadText, timestamp } from './lib/download'
+import { buildOperationFilenames, buildRestoreFilename, downloadText } from './lib/download'
 import { operationLabel, plural, rubles } from './lib/format'
 
 interface LoadedCatalog { catalog: Catalog; filename: string; warnings: string[] }
+type IconName = 'upload' | 'download' | 'backup' | 'settings' | 'reset' | 'back' | 'grid' | 'list' | 'success' | 'warning' | 'error' | 'info'
 
-function Notice({ kind, children }: { kind: 'success' | 'error' | 'warning' | 'info'; children: ReactNode }) {
-  return <div className={`notice notice--${kind}`} role={kind === 'error' ? 'alert' : 'status'}>{children}</div>
+function Icon({ name }: { name: IconName }) {
+  const paths: Record<IconName, ReactNode> = {
+    upload: <><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/><path d="M5 14v5h14v-5"/></>, download: <><path d="M12 4v12m0 0 4.5-4.5M12 16l-4.5-4.5"/><path d="M5 20h14"/></>,
+    backup: <><path d="M4 7h16v13H4zM7 4h10l3 3H4l3-3z"/><path d="M9 11h6"/></>, settings: <><path d="M4 6h10m4 0h2M4 12h2m4 0h10M4 18h7m4 0h5"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="13" cy="18" r="2"/></>,
+    reset: <><path d="M4 11a8 8 0 1 1 2 5.3"/><path d="M4 5v6h6"/></>, back: <path d="M19 12H5m0 0 6-6m-6 6 6 6"/>, grid: <><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><rect x="14" y="14" width="6" height="6"/></>,
+    list: <><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="5" cy="6" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="18" r="1"/></>, success: <><circle cx="12" cy="12" r="9"/><path d="m8 12 2.7 2.7L16.5 9"/></>, warning: <><path d="M12 3 2.8 20h18.4L12 3Z"/><path d="M12 9v4m0 3h.01"/></>, error: <><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></>, info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></>,
+  }
+  return <svg className="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
 }
+
+function BrandHeader() { return <div className="brand-header"><img src="/assets/ellemexa-logo.png" alt="ElleMexa"/><span>Менеджер цен</span></div> }
+function Notice({ kind, children, className = '' }: { kind: 'success' | 'error' | 'warning' | 'info'; children: ReactNode; className?: string }) { return <div className={`notice notice--${kind} ${className}`} role={kind === 'error' ? 'alert' : 'status'}><Icon name={kind}/><div className="notice__content">{children}</div></div> }
 
 function FileDrop({ label, accept, onFile, disabled = false }: { label: string; accept: string; onFile: (file: File) => void; disabled?: boolean }) {
-  const input = useRef<HTMLInputElement>(null)
-  const [dragging, setDragging] = useState(false)
-  const select = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (file) onFile(file)
-    event.target.value = ''
-  }
-  const drop = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault(); setDragging(false)
-    const file = event.dataTransfer.files?.[0]
-    if (file && !disabled) onFile(file)
-  }
-  return <div className={`dropzone ${dragging ? 'dropzone--active' : ''}`} onDragOver={(e) => { e.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={drop}>
-    <input ref={input} className="visually-hidden" type="file" accept={accept} onChange={select} disabled={disabled} />
-    <div className="dropzone__icon" aria-hidden="true">↑</div>
-    <button className="button button--primary" type="button" onClick={() => input.current?.click()} disabled={disabled}>{label}</button>
-    <span>или перетащите файл сюда</span>
-  </div>
+  const input = useRef<HTMLInputElement>(null); const [dragging, setDragging] = useState(false)
+  const select = (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) onFile(file); event.target.value = '' }
+  const drop = (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setDragging(false); const file = event.dataTransfer.files?.[0]; if (file && !disabled) onFile(file) }
+  return <div className={`dropzone ${dragging ? 'dropzone--active' : ''}`} onDragOver={(e) => { e.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={drop}><input ref={input} className="visually-hidden" type="file" accept={accept} onChange={select} disabled={disabled}/><Icon name="upload"/><button className="button button--primary" type="button" onClick={() => input.current?.click()} disabled={disabled}><Icon name="upload"/>{label}</button><span>или перетащите файл сюда</span></div>
 }
-
-async function readFile(file: File): Promise<string> {
-  try { return await file.text() } catch { throw new Error('Не удалось прочитать файл.') }
-}
+async function readFile(file: File) { try { return await file.text() } catch { throw new Error('Не удалось прочитать файл.') } }
 
 function CatalogReady({ loaded, onReplace }: { loaded: LoadedCatalog; onReplace: () => void }) {
-  const parents = loaded.catalog.rows.filter((row) => !row['Parent UID'].trim()).length
-  const variants = loaded.catalog.rows.length - parents
-  return <>
-    <Notice kind="success"><strong>Файл готов к работе</strong><span>{loaded.filename}</span><span>{plural(parents, ['товар', 'товара', 'товаров'])} · {plural(variants, ['вариант', 'варианта', 'вариантов'])} · {plural(extractCategories(loaded.catalog).length, ['категория', 'категории', 'категорий'])}</span></Notice>
-    {loaded.warnings.map((warning) => <Notice key={warning} kind="warning">{warning}</Notice>)}
-    <button className="button button--text" type="button" onClick={onReplace}>Заменить файл</button>
-  </>
+  const parents = loaded.catalog.rows.filter((row) => !row['Parent UID'].trim()).length, variants = loaded.catalog.rows.length - parents
+  return <><Notice kind="success"><strong>Файл готов к работе</strong><span>{loaded.filename}</span><span>{plural(parents, ['товар', 'товара', 'товаров'])} · {plural(variants, ['вариант', 'варианта', 'вариантов'])} · {plural(extractCategories(loaded.catalog).length, ['категория', 'категории', 'категорий'])}</span></Notice>{loaded.warnings.map((warning) => <Notice key={warning} kind="warning">{warning}</Notice>)}<button className="button button--secondary" type="button" onClick={onReplace}><Icon name="upload"/>Заменить файл</button></>
 }
 
-function PriceRange({ preview, mode }: { preview: PreviewProduct; mode: 'change' | 'restore' }) {
-  const old = preview.changes.map((change) => change.oldPriceNumber)
-  const next = preview.changes.map((change) => change.newPriceNumber)
-  const summarize = (values: number[]) => Math.min(...values) === Math.max(...values) ? rubles(values[0]) : `от ${rubles(Math.min(...values))}`
-  return <div className="price-pair"><div><span>{mode === 'restore' ? 'Сейчас' : 'Было'}</span><strong>{summarize(old)}</strong></div><span className="price-arrow">→</span><div><span>{mode === 'restore' ? 'Вернется' : 'Станет'}</span><strong className="price-new">{summarize(next)}</strong></div></div>
-}
+const summarize = (values: number[]) => Math.min(...values) === Math.max(...values) ? rubles(values[0]) : `от ${rubles(Math.min(...values))}`
+function PriceRange({ item, mode }: { item: PreviewProduct; mode: 'change' | 'restore' }) { return <div className="price-pair"><div><span>{mode === 'restore' ? 'Сейчас' : 'Было'}</span><strong>{summarize(item.changes.map((c) => c.oldPriceNumber))}</strong></div><span className="price-arrow">→</span><div><span>{mode === 'restore' ? 'Вернется' : 'Станет'}</span><strong className="price-new">{summarize(item.changes.map((c) => c.newPriceNumber))}</strong></div></div> }
+function ProductImage({ src, compact = false }: { src?: string; compact?: boolean }) { const [failed, setFailed] = useState(false); if (!src || failed) return <div className={`product-photo ${compact ? 'product-photo--compact' : ''} product-photo--empty`} aria-label="Нет фото">Фото</div>; return <img className={`product-photo ${compact ? 'product-photo--compact' : ''}`} src={src} alt="" loading="lazy" onError={() => setFailed(true)}/> }
+function Variants({ item }: { item: PreviewProduct }) { return <div className="variants">{item.changes.map((change) => <div className="variant" key={change.uid}><span>{change.editions}</span><span>{rubles(change.oldPriceNumber)} → <strong>{rubles(change.newPriceNumber)}</strong></span></div>)}</div> }
+function TilePreview({ items, mode }: { items: PreviewProduct[]; mode: 'change' | 'restore' }) { return <div className="preview-grid">{items.map((item) => <article className="product-card" key={item.parentUid}><div className="product-card__top"><ProductImage src={item.photo}/><div className="product-card__body"><h3>{item.title || 'Без названия'}</h3><p>{plural(item.changes.length, ['вариант', 'варианта', 'вариантов'])}</p><PriceRange item={item} mode={mode}/></div></div><details><summary>Показать варианты</summary><Variants item={item}/></details></article>)}</div> }
+function TablePreview({ items, mode }: { items: PreviewProduct[]; mode: 'change' | 'restore' }) { return <div className="preview-table-wrap"><table className="preview-table"><thead><tr><th>Фото</th><th>Товар</th><th>Вариантов</th><th>{mode === 'restore' ? 'Сейчас' : 'Было'}</th><th>{mode === 'restore' ? 'Вернется' : 'Станет'}</th><th></th></tr></thead>{items.map((item) => <tbody key={item.parentUid}><tr><td><ProductImage src={item.photo} compact/></td><td><strong>{item.title || 'Без названия'}</strong></td><td>{item.changes.length}</td><td>{summarize(item.changes.map((c) => c.oldPriceNumber))}</td><td className="price-new"><strong>{summarize(item.changes.map((c) => c.newPriceNumber))}</strong></td><td></td></tr><tr className="table-details-row"><td colSpan={6}><details><summary>Показать варианты</summary><Variants item={item}/></details></td></tr></tbody>)}</table></div> }
+function PreviewList({ items, mode }: { items: PreviewProduct[]; mode: 'change' | 'restore' }) { const [view, setView] = useState<'grid' | 'table'>('grid'); return <><div className="view-switch" role="group" aria-label="Вид предпросмотра"><button className={view === 'grid' ? 'active' : ''} onClick={() => setView('grid')}><Icon name="grid"/>Плитка</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><Icon name="list"/>Таблица</button></div><div className="desktop-preview">{view === 'table' ? <TablePreview items={items} mode={mode}/> : <TilePreview items={items} mode={mode}/>}</div><div className="mobile-preview"><TilePreview items={items} mode={mode}/></div></> }
 
-function ProductImage({ src }: { src?: string }) {
-  const [failed, setFailed] = useState(false)
-  if (!src || failed) return <div className="product-photo product-photo--empty" aria-label="Нет фото">Фото</div>
-  return <img className="product-photo" src={src} alt="" loading="lazy" onError={() => setFailed(true)} />
-}
-
-function PreviewList({ items, mode }: { items: PreviewProduct[]; mode: 'change' | 'restore' }) {
-  return <div className="preview-list">{items.map((item) => <article className="product-card" key={item.parentUid}>
-    <div className="product-card__top"><ProductImage src={item.photo} /><div className="product-card__body"><h3>{item.title || 'Без названия'}</h3><p>{plural(item.changes.length, ['цена', 'цены', 'цен'])}</p><PriceRange preview={item} mode={mode} /></div></div>
-    <details><summary>Показать варианты</summary><div className="variants">{item.changes.map((change) => <div className="variant" key={change.uid}><span>{change.editions}</span><span>{rubles(change.oldPriceNumber)} → <strong>{rubles(change.newPriceNumber)}</strong></span></div>)}</div></details>
-  </article>)}</div>
-}
-
-function ImportInstructions() {
-  return <section className="card instructions"><h2>Как загрузить файл обратно в Tilda</h2><ol><li>Откройте каталог Tilda.</li><li>Выберите импорт товаров из CSV и загрузите созданный файл.</li><li>Проверьте сопоставление полей.</li><li>Включите «Обновить только существующие товары и не создавать новые».</li><li>Не включайте замену изображений и тегов.</li><li>Выберите группировку вариантов по Parent UID.</li><li>Запустите обновление.</li></ol></section>
-}
-
-function parseOperation(type: PriceOperation['type'], valueText: string, direction: 'add' | 'subtract'): PriceOperation {
-  const value = Number(valueText.replace(',', '.'))
-  return type === 'adjust_amount' ? { type, value, direction } : { type, value } as PriceOperation
-}
+function ImportInstructions() { return <section className="card instructions"><h2>Как загрузить файл обратно в Tilda</h2><ol><li>Откройте каталог Tilda.</li><li>Выберите импорт товаров из CSV и загрузите созданный файл.</li><li>Проверьте сопоставление полей.</li><li>Включите «Обновить только существующие товары и не создавать новые».</li><li>Не включайте замену изображений и тегов.</li><li>Выберите группировку вариантов по Parent UID.</li><li>Запустите обновление.</li></ol></section> }
+function StickyActions({ onCsv, onBackup }: { onCsv: () => void; onBackup?: () => void }) { return <div className="sticky-actions" aria-label="Быстрые действия"><button className="button button--primary" onClick={onCsv}><Icon name="download"/>Скачать CSV</button>{onBackup && <button className="button button--secondary" onClick={onBackup}><Icon name="backup"/>Backup</button>}</div> }
+function parseOperation(type: PriceOperation['type'], valueText: string, direction: 'add' | 'subtract'): PriceOperation { const value = Number(valueText.replace(',', '.')); return type === 'adjust_amount' ? { type, value, direction } : { type, value } as PriceOperation }
 
 function MainFlow({ onRestore }: { onRestore: () => void }) {
-  const [loaded, setLoaded] = useState<LoadedCatalog | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [category, setCategory] = useState('')
-  const [operationType, setOperationType] = useState<PriceOperation['type']>('decrease_percent')
-  const [value, setValue] = useState('20')
-  const [direction, setDirection] = useState<'add' | 'subtract'>('add')
-  const [result, setResult] = useState<OperationResult | null>(null)
-  const [backup, setBackup] = useState<PriceBackup | null>(null)
-  const [safeCsv, setSafeCsv] = useState('')
-
-  const reset = () => { setLoaded(null); setError(''); setCategory(''); setResult(null); setBackup(null); setSafeCsv('') }
-  const upload = async (file: File) => {
-    if (!file.name.toLowerCase().endsWith('.csv')) { setError('Поддерживаются только CSV-файлы.'); return }
-    setLoading(true); setError(''); setResult(null)
-    await new Promise((resolve) => window.setTimeout(resolve, 0))
-    try {
-      const catalog = parseCatalogCsv(await readFile(file))
-      const validation = validateCatalog(catalog)
-      if (!validation.valid) throw new Error(validation.errors.join(' '))
-      setLoaded({ catalog, filename: file.name, warnings: validation.warnings })
-      setCategory('')
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Файл невозможно прочитать.') }
-    finally { setLoading(false) }
-  }
-  const categories = useMemo(() => loaded ? extractCategories(loaded.catalog) : [], [loaded])
-  const categoryProducts = useMemo(() => loaded && category ? productsInCategory(loaded.catalog, category) : [], [loaded, category])
-  const targetRows = useMemo(() => categoryProducts.flatMap(resolvePriceTargets), [categoryProducts])
-  const operation = parseOperation(operationType, value, direction)
-  const operationError = category ? validateOperation(operation) : null
-  const sample = targetRows.map((row) => Number(row.Price)).find((price) => Number.isFinite(price) && price > 0)
-  const showPreview = () => {
-    if (!loaded) return
-    setError('')
-    try {
-      const next = applyPriceOperation(loaded.catalog, category, operation)
-      const csv = createSafeCsv(loaded.catalog, next.catalog, next.whitelist)
-      setResult(next); setSafeCsv(csv); setBackup(createBackup(loaded.filename, category, operation, loaded.catalog, next))
-      window.scrollTo({ top: 0, behavior: 'smooth' })
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось рассчитать цены.') }
-  }
-
-  if (result && loaded && backup) return <>
-    <header className="page-header"><span className="eyebrow">Шаг 3 из 3</span><h1>Предпросмотр изменений</h1><p>{category} · {operationLabel(operation)}</p></header>
-    <section className="summary-strip"><strong>{plural(result.preview.length, ['товар', 'товара', 'товаров'])}</strong><strong>{plural(result.changes.length, ['строка с ценой', 'строки с ценой', 'строк с ценой'])}</strong></section>
-    <PreviewList items={result.preview} mode="change" />
-    <Notice kind="success"><strong>Проверка пройдена</strong><span>Изменяется только Price. Остальные данные сохранены без изменений.</span></Notice>
-    <div className="actions"><button className="button button--primary" onClick={() => downloadText(safeCsv, `ellemexa-prices-${timestamp()}.csv`, 'text/csv')}>Скачать новый CSV</button><button className="button button--secondary" onClick={() => downloadText(JSON.stringify(backup, null, 2), `ellemexa-backup-${timestamp()}.json`, 'application/json')}>Скачать backup цен</button><p className="hint">Сохраните backup, если захотите позже вернуть цены до акции.</p><button className="button button--text" onClick={() => { setResult(null); setError(''); window.scrollTo(0, 0) }}>Изменить настройки</button><button className="button button--text" onClick={reset}>Начать заново</button></div>
-    <ImportInstructions />
-  </>
-
-  return <>
-    <header className="page-header"><span className="eyebrow">ElleMexa · внутренняя утилита</span><h1>Массовое изменение цен</h1><p className="subtitle">для каталога Tilda</p><p>Загрузите CSV, выберите категорию и проверьте новые цены перед скачиванием.</p></header>
-    {!loaded && <section className="card"><FileDrop label="Загрузить CSV" accept=".csv,text/csv" onFile={upload} disabled={loading} />{loading && <Notice kind="info">Читаем каталог…</Notice>}<div className="privacy"><p>Файл обрабатывается прямо в браузере и никуда не загружается.</p><p>Панель изменяет только цены. Фотографии, размеры, остатки, описания и другие данные остаются без изменений.</p></div><button className="button button--secondary button--full" onClick={onRestore}>Восстановить цены из backup</button></section>}
-    {error && <Notice kind="error">{error}</Notice>}
-    {loaded && <><CatalogReady loaded={loaded} onReplace={reset} /><section className="card form-card"><span className="eyebrow">Шаг 2 из 3</span><h2>Настройка изменения</h2><label>Категория<select value={category} onChange={(event) => { setCategory(event.target.value); setError('') }}><option value="">Выберите категорию</option>{categories.map((item) => <option key={item}>{item}</option>)}</select></label>{category && <div className="stats"><span>Найдено: <strong>{plural(categoryProducts.length, ['товар', 'товара', 'товаров'])}</strong></span><span>Будет затронуто: <strong>{plural(targetRows.length, ['строка с ценой', 'строки с ценой', 'строк с ценой'])}</strong></span></div>}<fieldset disabled={!category}><legend>Как изменить цену?</legend><div className="radio-list">{([
-      ['decrease_percent', 'Снизить на %'], ['increase_percent', 'Повысить на %'], ['fixed_price', 'Установить одну цену'], ['adjust_amount', 'Изменить на сумму'],
-    ] as const).map(([type, label]) => <label className="radio" key={type}><input type="radio" name="operation" checked={operationType === type} onChange={() => setOperationType(type)} /><span>{label}</span></label>)}</div></fieldset>{operationType === 'adjust_amount' && <div className="segmented"><button type="button" className={direction === 'add' ? 'active' : ''} onClick={() => setDirection('add')}>+ Прибавить</button><button type="button" className={direction === 'subtract' ? 'active' : ''} onClick={() => setDirection('subtract')}>− Вычесть</button></div>}<label>{operationType.includes('percent') ? 'Процент' : operationType === 'fixed_price' ? 'Новая цена, ₽' : 'Сумма, ₽'}<input type="number" min="0" inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} /></label>{operationError && <Notice kind="error">{operationError}</Notice>}{sample && !operationError && calculatePrice(sample, operation) > 0 && <div className="example"><span>Пример</span><strong>{rubles(sample)} → {rubles(calculatePrice(sample, operation))}</strong></div>}<Notice kind="info">Будет изменено только поле Price.</Notice><button className="button button--primary button--full" disabled={!category || !!operationError || !targetRows.length} onClick={showPreview}>Показать изменения</button></section></>}
-  </>
+  const [loaded, setLoaded] = useState<LoadedCatalog | null>(null), [loading, setLoading] = useState(false), [fileError, setFileError] = useState(''), [actionError, setActionError] = useState(''), [category, setCategory] = useState('')
+  const [operationType, setOperationType] = useState<PriceOperation['type']>('decrease_percent'), [value, setValue] = useState('20'), [direction, setDirection] = useState<'add' | 'subtract'>('add')
+  const [result, setResult] = useState<OperationResult | null>(null), [backup, setBackup] = useState<PriceBackup | null>(null), [safeCsv, setSafeCsv] = useState(''), [filenames, setFilenames] = useState<{ csv: string; backup: string } | null>(null), [downloaded, setDownloaded] = useState<{ csv?: string; backup?: string }>({})
+  const reset = () => { setLoaded(null); setFileError(''); setActionError(''); setCategory(''); setResult(null); setBackup(null); setSafeCsv(''); setFilenames(null); setDownloaded({}) }
+  const upload = async (file: File) => { if (!file.name.toLowerCase().endsWith('.csv')) { setFileError('Поддерживаются только CSV-файлы.'); return } setLoading(true); setFileError(''); await new Promise((resolve) => window.setTimeout(resolve, 0)); try { const catalog = parseCatalogCsv(await readFile(file)), validation = validateCatalog(catalog); if (!validation.valid) throw new Error(validation.errors.join(' ')); setLoaded({ catalog, filename: file.name, warnings: validation.warnings }); setCategory('') } catch (cause) { setFileError(cause instanceof Error ? cause.message : 'Файл невозможно прочитать.') } finally { setLoading(false) } }
+  const categories = useMemo(() => loaded ? extractCategories(loaded.catalog) : [], [loaded]), categoryProducts = useMemo(() => loaded && category ? productsInCategory(loaded.catalog, category) : [], [loaded, category]), targetRows = useMemo(() => categoryProducts.flatMap(resolvePriceTargets), [categoryProducts])
+  const operation = parseOperation(operationType, value, direction), operationError = category && targetRows.length ? validatePriceTargets(targetRows, operation) : null, displayedError = actionError || operationError
+  const sample = targetRows.map((row) => Number(row.Price)).find((price) => Number.isFinite(price) && price > 0), clearError = () => setActionError('')
+  const showPreview = () => { if (!loaded || displayedError) return; try { const next = applyPriceOperation(loaded.catalog, category, operation), csv = createSafeCsv(loaded.catalog, next.catalog, next.whitelist), now = new Date(); setResult(next); setSafeCsv(csv); setBackup(createBackup(loaded.filename, category, operation, loaded.catalog, next, now)); setFilenames(buildOperationFilenames(category, operation, now)); setDownloaded({}); window.scrollTo({ top: 0, behavior: 'smooth' }) } catch (cause) { setActionError(cause instanceof Error ? cause.message : 'Не удалось рассчитать цены.') } }
+  const downloadCsv = () => { if (filenames) { downloadText(safeCsv, filenames.csv, 'text/csv'); setDownloaded((state) => ({ ...state, csv: filenames.csv })) } }, downloadBackup = () => { if (filenames && backup) { downloadText(JSON.stringify(backup, null, 2), filenames.backup, 'application/json'); setDownloaded((state) => ({ ...state, backup: filenames.backup })) } }
+  if (result && loaded && backup && filenames) return <div className="preview-page"><header className="page-header"><span className="eyebrow">Шаг 3 из 3</span><h1>Предпросмотр изменений</h1><p>{category} · {operationLabel(operation)}</p></header><section className="summary-strip"><strong>{plural(result.preview.length, ['товар', 'товара', 'товаров'])}</strong><strong>{plural(result.changes.length, ['вариант с ценой', 'варианта с ценой', 'вариантов с ценой'])}</strong></section><PreviewList items={result.preview} mode="change"/><Notice kind="success"><strong>Проверка пройдена</strong><span>Будут изменены только цены товаров. Остальные данные останутся без изменений.</span></Notice><div className="actions"><button className="button button--primary" onClick={downloadCsv}><Icon name="download"/>Скачать новый CSV</button><button className="button button--secondary" onClick={downloadBackup}><Icon name="backup"/>Скачать backup цен</button>{downloaded.csv && <Notice kind="success"><strong>Файл для Tilda скачан</strong><span>{downloaded.csv}</span></Notice>}{downloaded.backup && <Notice kind="success"><strong>Backup сохранен</strong><span>{downloaded.backup}</span></Notice>}<p className="hint actions__wide">Сохраните backup, чтобы позже вернуть цены до акции. CSV и backup имеют одинаковую основу имени.</p><button className="button button--secondary actions__wide" onClick={() => { setResult(null); clearError(); window.scrollTo(0, 0) }}><Icon name="settings"/>Изменить настройки</button><button className="button button--tertiary actions__wide" onClick={reset}><Icon name="reset"/>Начать заново</button></div><ImportInstructions/><StickyActions onCsv={downloadCsv} onBackup={downloadBackup}/></div>
+  return <><header className="page-header page-header--main"><span className="eyebrow">Каталог Tilda</span><h1>Массовое изменение цен</h1><p>Загрузите каталог, выберите категорию и проверьте новые цены перед скачиванием.</p></header>{!loaded && <section className="card upload-card"><FileDrop label="Загрузить CSV" accept=".csv,text/csv" onFile={upload} disabled={loading}/>{loading && <Notice kind="info">Читаем каталог…</Notice>}<div className="privacy"><p>Файл обрабатывается прямо в браузере и никуда не загружается.</p><p>Панель изменяет только цены. Фотографии, размеры, остатки, описания и другие данные остаются без изменений.</p></div><button className="button button--secondary button--full" onClick={onRestore}><Icon name="backup"/>Восстановить цены из backup</button></section>}{fileError && <Notice kind="error">{fileError}</Notice>}{loaded && <><CatalogReady loaded={loaded} onReplace={reset}/><section className="card form-card"><span className="eyebrow">Шаг 2 из 3</span><h2>Настройка изменения</h2><label>Категория<select value={category} onChange={(e) => { setCategory(e.target.value); clearError() }}><option value="">Выберите категорию</option>{categories.map((item) => <option key={item}>{item}</option>)}</select></label>{category && <div className="stats"><strong>{plural(categoryProducts.length, ['товар', 'товара', 'товаров'])}</strong><strong>{plural(targetRows.length, ['вариант с ценой', 'варианта с ценой', 'вариантов с ценой'])}</strong></div>}<fieldset disabled={!category}><legend>Как изменить цену?</legend><div className="radio-list">{([['decrease_percent', 'Снизить на %'], ['increase_percent', 'Повысить на %'], ['fixed_price', 'Установить одну цену'], ['adjust_amount', 'Изменить на сумму']] as const).map(([type, label]) => <label className="radio" key={type}><input type="radio" name="operation" checked={operationType === type} onChange={() => { setOperationType(type); clearError() }}/><span>{label}</span></label>)}</div></fieldset>{operationType === 'adjust_amount' && <div className="segmented"><button type="button" className={direction === 'add' ? 'active' : ''} onClick={() => { setDirection('add'); clearError() }}>+ Прибавить</button><button type="button" className={direction === 'subtract' ? 'active' : ''} onClick={() => { setDirection('subtract'); clearError() }}>− Вычесть</button></div>}<label>{operationType.includes('percent') ? 'Процент' : operationType === 'fixed_price' ? 'Новая цена, ₽' : 'Сумма, ₽'}<input type="number" min="0" inputMode="decimal" value={value} onChange={(e) => { setValue(e.target.value); clearError() }}/></label>{sample && !displayedError && calculatePrice(sample, operation) > 0 && <div className="example"><span>Пример</span><strong>{rubles(sample)} → {rubles(calculatePrice(sample, operation))}</strong></div>}<Notice kind="info">Будут изменены только цены товаров. Остальные данные останутся без изменений.</Notice>{displayedError && <Notice kind="error" className="operation-error">{displayedError}</Notice>}<button className="button button--primary button--full" disabled={!category || !!displayedError || !targetRows.length} onClick={showPreview}>Показать изменения</button></section></>}</>
 }
 
 function RestoreFlow({ onMain }: { onMain: () => void }) {
-  const [loaded, setLoaded] = useState<LoadedCatalog | null>(null)
-  const [backup, setBackup] = useState<PriceBackup | null>(null)
-  const [result, setResult] = useState<RestoreResult | null>(null)
-  const [safeCsv, setSafeCsv] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const uploadCatalog = async (file: File) => {
-    if (!file.name.toLowerCase().endsWith('.csv')) { setError('Поддерживаются только CSV-файлы.'); return }
-    setLoading(true); setError('')
-    try { const catalog = parseCatalogCsv(await readFile(file)); const validation = validateCatalog(catalog); if (!validation.valid) throw new Error(validation.errors.join(' ')); setLoaded({ catalog, filename: file.name, warnings: validation.warnings }) }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'Файл невозможно прочитать.') }
-    finally { setLoading(false) }
-  }
-  const uploadBackup = async (file: File) => {
-    if (!file.name.toLowerCase().endsWith('.json')) { setError('Выберите backup-файл в формате JSON.'); return }
-    if (!loaded) return
-    setLoading(true); setError('')
-    try { const parsed = parseBackupJson(await readFile(file)); const restored = restorePrices(loaded.catalog, parsed); setSafeCsv(createSafeCsv(loaded.catalog, restored.catalog, restored.whitelist)); setBackup(parsed); setResult(restored); window.scrollTo(0, 0) }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось прочитать backup.') }
-    finally { setLoading(false) }
-  }
-  if (loaded && backup && result) return <><header className="page-header"><span className="eyebrow">Восстановление</span><h1>Предпросмотр восстановления</h1><p>{backup.category} · backup от {new Date(backup.createdAt).toLocaleDateString('ru-RU')}</p></header><Notice kind={result.missing ? 'warning' : 'success'}><strong>Найдено {result.found} из {backup.items.length}</strong>{result.missing > 0 && <span>{plural(result.missing, ['позиция будет пропущена', 'позиции будут пропущены', 'позиций будут пропущены'])}.</span>}</Notice><PreviewList items={result.preview} mode="restore" /><Notice kind="success"><strong>Проверка пройдена</strong><span>Восстанавливается только Price. Price Old и остальные данные свежего каталога сохранены.</span></Notice><div className="actions"><button className="button button--primary" onClick={() => downloadText(safeCsv, `ellemexa-restored-${timestamp()}.csv`, 'text/csv')}>Скачать CSV с восстановленными ценами</button><button className="button button--text" onClick={onMain}>Начать заново</button></div><ImportInstructions /></>
-  return <><header className="page-header"><button className="back-link" onClick={onMain}>← К изменению цен</button><span className="eyebrow">Отдельный сценарий</span><h1>Восстановление цен</h1><p>Верните цены из ранее сохраненного backup, не затирая свежие данные каталога.</p></header><section className="card"><h2>1. Загрузите актуальный CSV из Tilda</h2><p className="hint">Перед восстановлением выгрузите свежий каталог. Так изменения фотографий, размеров, остатков и других данных сохранятся.</p>{!loaded ? <FileDrop label="Загрузить актуальный CSV" accept=".csv,text/csv" onFile={uploadCatalog} disabled={loading} /> : <CatalogReady loaded={loaded} onReplace={() => { setLoaded(null); setBackup(null); setResult(null); setError('') }} />}</section>{loaded && <section className="card"><h2>2. Загрузите backup цен</h2><FileDrop label="Загрузить backup цен" accept=".json,application/json" onFile={uploadBackup} disabled={loading} /></section>}{loading && <Notice kind="info">Читаем файл…</Notice>}{error && <Notice kind="error">{error}</Notice>}</>
+  const [loaded, setLoaded] = useState<LoadedCatalog | null>(null), [backup, setBackup] = useState<PriceBackup | null>(null), [result, setResult] = useState<RestoreResult | null>(null), [safeCsv, setSafeCsv] = useState(''), [filename, setFilename] = useState(''), [downloaded, setDownloaded] = useState(''), [loading, setLoading] = useState(false), [error, setError] = useState('')
+  const uploadCatalog = async (file: File) => { if (!file.name.toLowerCase().endsWith('.csv')) { setError('Поддерживаются только CSV-файлы.'); return } setLoading(true); setError(''); try { const catalog = parseCatalogCsv(await readFile(file)), validation = validateCatalog(catalog); if (!validation.valid) throw new Error(validation.errors.join(' ')); setLoaded({ catalog, filename: file.name, warnings: validation.warnings }) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Файл невозможно прочитать.') } finally { setLoading(false) } }
+  const uploadBackup = async (file: File) => { if (!file.name.toLowerCase().endsWith('.json')) { setError('Выберите backup-файл в формате JSON.'); return } if (!loaded) return; setLoading(true); setError(''); try { const parsed = parseBackupJson(await readFile(file)), restored = restorePrices(loaded.catalog, parsed); setSafeCsv(createSafeCsv(loaded.catalog, restored.catalog, restored.whitelist)); setBackup(parsed); setResult(restored); setFilename(buildRestoreFilename(parsed.category)); setDownloaded(''); window.scrollTo(0, 0) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось прочитать backup.') } finally { setLoading(false) } }
+  const downloadRestore = () => { downloadText(safeCsv, filename, 'text/csv'); setDownloaded(filename) }
+  if (loaded && backup && result) return <div className="preview-page"><header className="page-header"><span className="eyebrow">Восстановление</span><h1>Предпросмотр восстановления</h1><p>{backup.category} · backup от {new Date(backup.createdAt).toLocaleDateString('ru-RU')}</p></header><Notice kind={result.missing ? 'warning' : 'success'}><strong>Найдено {result.found} из {backup.items.length} ценовых позиций</strong>{result.missing > 0 && <span>{plural(result.missing, ['позиция будет пропущена', 'позиции будут пропущены', 'позиций будут пропущены'])}.</span>}</Notice><PreviewList items={result.preview} mode="restore"/><Notice kind="success"><strong>Проверка пройдена</strong><span>Будут восстановлены только цены товаров. Старая цена и остальные данные свежего каталога останутся без изменений.</span></Notice><div className="actions"><button className="button button--primary actions__wide" onClick={downloadRestore}><Icon name="download"/>Скачать CSV с восстановленными ценами</button>{downloaded && <Notice kind="success"><strong>Файл для Tilda скачан</strong><span>{downloaded}</span></Notice>}<button className="button button--tertiary actions__wide" onClick={onMain}><Icon name="reset"/>Начать заново</button></div><ImportInstructions/><StickyActions onCsv={downloadRestore}/></div>
+  return <><header className="page-header restore-header"><button className="button button--secondary back-button" onClick={onMain}><Icon name="back"/>Вернуться к изменению цен</button><h1>Восстановление цен</h1><p>Верните цены из ранее сохраненного backup, не затирая свежие данные каталога.</p></header><section className="card"><h2>1. Загрузите актуальный CSV из Tilda</h2><p className="hint">Перед восстановлением выгрузите свежий каталог. Так изменения фотографий, размеров, остатков и других данных сохранятся.</p>{!loaded ? <FileDrop label="Загрузить актуальный CSV" accept=".csv,text/csv" onFile={uploadCatalog} disabled={loading}/> : <CatalogReady loaded={loaded} onReplace={() => { setLoaded(null); setBackup(null); setResult(null); setError('') }}/>}</section>{loaded && <section className="card"><h2>2. Загрузите backup цен</h2><FileDrop label="Загрузить backup цен" accept=".json,application/json" onFile={uploadBackup} disabled={loading}/></section>}{loading && <Notice kind="info">Читаем файл…</Notice>}{error && <Notice kind="error">{error}</Notice>}</>
 }
 
-export default function App() {
-  const [flow, setFlow] = useState<'main' | 'restore'>('main')
-  return <main className="container">{flow === 'main' ? <MainFlow onRestore={() => setFlow('restore')} /> : <RestoreFlow onMain={() => setFlow('main')} />}<footer>Обработка выполняется локально на вашем устройстве.</footer></main>
-}
-
+export default function App() { const [flow, setFlow] = useState<'main' | 'restore'>('main'); return <div className="container"><BrandHeader/><main>{flow === 'main' ? <MainFlow onRestore={() => setFlow('restore')}/> : <RestoreFlow onMain={() => setFlow('main')}/>}</main><footer>Обработка выполняется локально на вашем устройстве.</footer></div> }
