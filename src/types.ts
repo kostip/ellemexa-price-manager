@@ -23,6 +23,11 @@ export type PriceOperation =
   | { type: 'fixed_price'; value: number }
   | { type: 'adjust_amount'; value: number; direction: 'add' | 'subtract' }
 
+export interface PriceRule {
+  category: string
+  operation: PriceOperation
+}
+
 export interface PriceChange {
   uid: string
   parentUid: string
@@ -39,6 +44,7 @@ export interface PreviewProduct {
   title: string
   photo?: string
   changes: PriceChange[]
+  appliedRule?: PriceRule
 }
 
 export interface OperationResult {
@@ -56,13 +62,45 @@ export interface BackupItem {
   originalPriceOld: string
 }
 
-export interface PriceBackup {
+export interface PriceBackupV1 {
   schemaVersion: 1
   createdAt: string
   sourceFile: string
   category: string
   operation: PriceOperation
   items: BackupItem[]
+}
+
+export interface PriceBackupV2 {
+  schemaVersion: 2
+  createdAt: string
+  sourceFile: string
+  category: string
+  rules: PriceRule[]
+  items: BackupItem[]
+}
+
+export type PriceBackup = PriceBackupV1 | PriceBackupV2
+
+export interface RuleConflict {
+  parentUid: string
+  title: string
+  matches: PriceRule[]
+}
+
+export interface MultiRuleResolution {
+  rules: PriceRule[]
+  ruleErrors: Array<string | null>
+  conflicts: RuleConflict[]
+  uniqueProductCount: number
+  uniqueTargetCount: number
+  overlapCount: number
+}
+
+export interface MultiOperationResult extends OperationResult {
+  rules: PriceRule[]
+  uniqueProductCount: number
+  overlapCount: number
 }
 
 export interface RestoreResult {
@@ -73,4 +111,3 @@ export interface RestoreResult {
   found: number
   missing: number
 }
-

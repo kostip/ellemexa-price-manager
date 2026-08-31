@@ -1,4 +1,4 @@
-import type { PriceOperation } from '../types'
+import type { PriceBackup, PriceOperation, PriceRule } from '../types'
 
 const TRANSLITERATION: Record<string, string> = {
   а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y',
@@ -40,8 +40,20 @@ export function buildOperationFilenames(category: string, operation: PriceOperat
   return { csv: `${base}.csv`, backup: `${base}_backup.json` }
 }
 
+export function buildRuleFilenames(rules: PriceRule[], date = new Date()): { csv: string; backup: string } {
+  if (rules.length === 1) return buildOperationFilenames(rules[0].category, rules[0].operation, date)
+  const base = `ellemexa_multi-${rules.length}-categories_${localTimestamp(date)}`
+  return { csv: `${base}.csv`, backup: `${base}_backup.json` }
+}
+
 export function buildRestoreFilename(category: string, date = new Date()): string {
   return `ellemexa_${slugifyCategory(category)}_restore_${localTimestamp(date)}.csv`
+}
+
+export function buildBackupRestoreFilename(backup: PriceBackup, date = new Date()): string {
+  if (backup.schemaVersion === 2 && backup.rules.length > 1) return `ellemexa_multi-${backup.rules.length}-categories_restore_${localTimestamp(date)}.csv`
+  const category = backup.schemaVersion === 2 ? backup.rules[0].category : backup.category
+  return buildRestoreFilename(category, date)
 }
 
 export function downloadText(content: string, filename: string, type: string): void {

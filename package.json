@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "vitest run tests/unit.test.ts",
+    "test": "vitest run tests/unit.test.ts tests/multiRules.test.ts",
     "test:watch": "vitest",
     "smoke": "vitest run tests/real-csv.smoke.test.ts"
   },
